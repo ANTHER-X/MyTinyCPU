@@ -1,21 +1,40 @@
 #include <iostream>
+#include <limits>
 #include <cpu.hpp>
 
 
-int main(){
+int main(int argc, char* argv[]){
+    if(argc < 2){
+        std::cerr << "No Program Loaded. Use ./MyTinyCPU <program.bin> for use" << std::endl;
+        return 1;
+    }
+
+    bool deb = false;
+
+    int posFlag = 1;
+    // Validar flag de debug
+    for(; posFlag<argc; posFlag++){
+        std::string arg = argv[posFlag];
+        if(arg == "-debug" || arg == "-dbg"){
+            std::cout << "Debug activo." << std::endl;
+            deb = true;
+            break;
+        }
+    }
 
     CPU cpu1;
-    cpu1.LoadROM("inst.bin");
+    for (int i=1; i<argc; i++){
+        // Evita cargar flag debug
+        if(i == posFlag) continue;
 
-    cpu1.ViewRam(); // Tabla de RAM
-    cpu1.ViewRom(); // Matriz de la ROM
-
-    cpu1.InitRun(); // PC = 0
-    cpu1.Run(); // Itera y recorre IR y PC hasta que se detenga: 1111
-    // Si PC llega al tope de la RAM, se reinicia el contador
-
-    cpu1.ViewRegisters(); // Mostrar la tabla de RA final, asi como
-    /*A, PC, IR, Carry, Zero y Running (estado activo del CPU)*/
+        // Carga programas
+        cpu1.InitRun();
+        if(cpu1.LoadROM(argv[i])){
+            cpu1.Run(deb);
+        } else{
+            std::cerr << "Error to load program " << i << ". Next program loading..." << std::endl;
+        }
+    }
 
     return 0;
 }

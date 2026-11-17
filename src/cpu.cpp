@@ -1,9 +1,8 @@
 #include <cpu.hpp>
 
 void CPU::AddInstruccion(uint8_t instruccion, uint8_t data){
-    ROM[PC] = instruccion;
+    ROM[PC++] = instruccion;
     ROM[PC++] = data;
-    PC++;
 }
 
 
@@ -25,14 +24,20 @@ void CPU::ViewRom(){
 
 void CPU::ViewRegisters(){
 
-    ViewRam();
-    ViewRom();
+    if(debug){
+        ViewRam();
+        ViewRom();
+    }
     std::cout << std::endl << "Datos Internos:" << std::endl;
     std::cout << "PC: " << std::bitset<8>(PC) << std::endl;
     std::cout << "IR: " << std::bitset<8>(IR) << std::endl;
     std::cout << "A: " << std::bitset<8>(A) << std::endl;
     std::cout << "Flags: " << std::bitset<8>(Flags) << std::endl;
-    std::cout << "Running: " << std::bitset<8>(Running) << std::endl;
+    std::cout << std::boolalpha;
+    std::cout << "Running: " << Running << std::endl;
+    std::cout << std::noboolalpha;
+    std::cout << "Cycles Executed: " << TotalCycles << std::endl;
+    std::cout << "Instructions Used: " << InstructionCount << std::endl;
 }
 
 uint8_t CPU::GetByteROM(){
@@ -47,30 +52,56 @@ uint8_t CPU::GetByteROM(){
 }
 
 void CPU::InitRun(){
-    PC = 0;
+    for(uint8_t& by : RAM) by=0;
+    for(uint8_t& by : ROM) by=0;
+    A = DATA = IR = OPCODE = PC = Flags = 0x00;
+    SP = RAM_SIZE-1;
+    debug = false;
     Running = true;
 }
 
-void CPU::Run(){
+void CPU::Run(bool dbg){
     // Salimos si no se ah iniciado
     if(!Running){
         std::cout << std::endl << "La CPU no ah sido inicializada!!!" << std::endl;
         return;
     }
+    debug = dbg;
+    auto start = std::chrono::steady_clock::now();
 
-    std::cout << std::endl << "Iniciando Ciclo: " << std::endl;
+    // ver los datos
+    if(debug){
+        ViewRom();
+        ViewRam();
+    }
+
+    std::cout << "Potencia: " << CLOCK_HZ << "Hz";
+    std::cout << std::endl << "Iniciando Ejecucion: " << std::endl;
     while(Running){
         Fetch();
         Decode();
-        Execute();
+        uint8_t cycles = Execute();
+
+        TotalCycles += cycles;
+        InstructionCount++;
+
+        auto elapsed = std::chrono::duration<double>(static_cast<double>(TotalCycles) / CLOCK_HZ );
+        auto target = start +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(elapsed);
+
+        std::this_thread::sleep_until(target);
     }
+
+    // ver los datos
+    ViewRegisters();
 }
 
 void CPU::Fetch(){
     IR = GetByteROM();
     if(!Running) std::cout << "RUNNING STOP, OUT OF ROM" << std::endl;
 
-    std::cout << "IR: " << std::bitset<8>(IR) << std::endl
+    if(debug) std::cout << "IR: " << std::bitset<8>(IR) << std::endl
+              << "A: " << std::bitset<8>(A) << std::endl
               << "SP: " << std::bitset<8>(SP) << std::endl
               << "PC Pointer: " << std::bitset<8>(PC)
               << ". PC Register: " << std::bitset<8>(ROM[PC]) << std::endl;
@@ -78,60 +109,72 @@ void CPU::Fetch(){
 
 void CPU::Decode(){
     OPCODE = IR;
-    if( (OPCODE <= 0x05 && OPCODE > 0x00) || OPCODE == 0x09 || (OPCODE>=0xE && OPCODE < 0x11)) DATA = GetByteROM();
-    std::cout << "Codigo de operacion: " << std::bitset<8>(OPCODE) << 
-                 ". Dato: " << std::bitset<8>(DATA) << std::endl << std::endl;
+    DATA = GetByteROM();
+    
+    if(debug)std::cout << "Codigo de operacion: " << std::bitset<8>(OPCODE) << 
+            ". Dato: " << std::bitset<8>(DATA) << std::endl << std::endl;
 }
 
-void CPU::Execute(){
+uint8_t CPU::Execute(){
+    if(!Running) std::cerr << "Limite de ROM alcanzado, no se puede continuar" << std::endl;
     switch(OPCODE){
 
         // No hace nada :/
-        case 0x00:{ break; }
+        case 0x00:{ return 2; }
         // Carga Datos hacia A
-        case 0x01:{ A = DATA; break;}
+        case 0x01:{ A = DATA; return 2;}
 
         case 0x02:{ // Guarda A en la posicion en memoria
-            RAM[DATA] = (A & 0x0F); break;}
+            if(DATA >= RAM_SIZE) return 2;
+            RAM[DATA] = A; return 3;}
 
-        case 0x03:{ // Guarda en A una pos en RAM
-            A = (RAM[DATA] & 0x0F); break;}
+        case 0x03:{ // Carga en A una pos en RAM
+            if(DATA >= RAM_SIZE) return 2;
+            A = RAM[DATA]; return 3;}
 
         case 0x04:{ // Suma A una pos de RAM
-            A = ADD(A, RAM[DATA]);  break;}
+            if(DATA >= RAM_SIZE) return 2;
+            A = ADD(A, RAM[DATA]);  return 4;}
 
         case 0x05:{ // Resta Suma A una pos de RAM
-            A = DES(A, RAM[DATA]);  break;}
+            if(DATA >= RAM_SIZE) return 2;
+            A = DES(A, RAM[DATA]);  return 4;}
 
         // Salto de PC hacia puntero
-        case 0x06:{ Jump();         break;}
+        case 0x06:{ Jump();         return 3;}
 
         case 0x07: { // Salta a PC si esta activo Zero
-            if((Flags & 0x02) == 0x02) Jump();      break;}
+            if((Flags & FLAG_Z) == FLAG_Z){
+                Jump();
+                return 3;
+            }
+            return 2;}
 
         case 0x08: { // Salta a PC si Carry esta activo
-            if( (Flags & 0x01) == 0x01 ) Jump();    break;}
+            if((Flags & FLAG_C) == FLAG_C){
+                Jump();
+                return 3;
+            }
+            return 2;}
 
         case 0x09: { // Compara la Resta de A y pos en RAM
-            CMP(A, RAM[DATA]);  break;}
+            CMP(A, RAM[DATA]);  return 4;}
         
         // PUSH
-        case 0x0A: { PUSH(A); break;}
+        case 0x0A: { PUSH(A);   return 3;}
         // POP 
-        case 0x0B: { POP(A); break;}
+        case 0x0B: { A = POP(); return 3;}
         // CALL
-        case 0x0C:{
-            CALL();
-            break;}
+        case 0x0C:{ CALL(); return 4;}
         // RET
-        case 0x0D:{ RET(); break;}
+        case 0x0D:{ RET(); return 4;}
 
         // And, execute A And Data
         case 0x0E:{
             A = AND(A, DATA);
             SetFlag(FLAG_Z, (A == 0x00));
             SetFlag(FLAG_C, false);
-            break;
+            return 2;
         }
         // OR
         case 0x0F:{
@@ -139,7 +182,7 @@ void CPU::Execute(){
 
             SetFlag(FLAG_Z, (A == 0x00));
             SetFlag(FLAG_C, false);
-            break;
+            return 2;
         }
         // XOR
         case 0x10:{
@@ -147,7 +190,7 @@ void CPU::Execute(){
 
             SetFlag(FLAG_Z, (A == 0x00));
             SetFlag(FLAG_C, false);
-            break;
+            return 2;
         }
         // NOT
         case 0x11:{
@@ -155,18 +198,18 @@ void CPU::Execute(){
 
             SetFlag(FLAG_Z, (A == 0x00));
             SetFlag(FLAG_C, false);
-            break;
+            return 2;
         }
 
         // Terminar las instrucciones
         case 0xFF: {
             Running = false;
             std::cout << std::endl << "Operaciones terminadas." << std::endl;
-            break;
+            return 2;
         }
 
         // No hacemos nada si no sabe la instruccion
-        default: break;
+        default: return 2;
     }
 }
 
@@ -201,14 +244,20 @@ bool CPU::LoadROM(const std::string& filename){
 
 
 /*########### Operacions de la ALU ###########*/
-void CPU::PUSH(uint8_t data){
-    RAM[SP] = data;
-    if(SP > 10) SP--;
+void CPU::PUSH(uint8_t addr){
+    if(SP > RAM_SIZE - RAM_RESERVED){
+        SP--;
+        RAM[SP] = addr;
+    }
 }
 
-void CPU::POP(uint8_t data){
-    data = RAM[SP];
-    if(SP < RAM_SIZE)SP++;
+uint8_t CPU::POP(){
+    if(SP < RAM_SIZE){
+        uint8_t addr = RAM[SP];
+        SP++;
+        return addr;
+    }
+    else return 0;
 }
 
 void CPU::CALL(){
@@ -217,15 +266,16 @@ void CPU::CALL(){
 }
 
 void CPU::RET(){
-    POP(PC);
+    PC = POP();
 }
 
 uint8_t CPU::ADD(uint8_t a, uint8_t b){
-    uint8_t result = a + b;
-    SetFlag(FLAG_C, (result > 15));
+    bool carry = a + b > std::numeric_limits<uint8_t>::max();
+    uint8_t result = a+b;
+    SetFlag(FLAG_C, carry);
     SetFlag(FLAG_Z, (result == 0x00));
 
-    return (result & 0x0F);
+    return result;
 }
 
 uint8_t CPU::DES(uint8_t a, uint8_t b){
@@ -241,11 +291,12 @@ uint8_t CPU::DES(uint8_t a, uint8_t b){
         SetFlag(FLAG_Z, (result == 0x00));
     }
 
-    return (result & 0x0F);
+    return result;
 }
 
 void CPU::CMP(uint8_t a, uint8_t b){
-    uint8_t result = DES(a,b);
+    SetFlag(FLAG_C, (a < b));
+    SetFlag(FLAG_Z, (a == b));
 }
 
 void CPU::Jump(){
